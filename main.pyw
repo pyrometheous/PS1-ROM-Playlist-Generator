@@ -1,75 +1,136 @@
 import os
+import re
 import tkinter as tk
-from tkinter import ttk
-from tkinter import filedialog
-from tkinter import messagebox
+from tkinter import ttk, filedialog, messagebox
 
 
-class M3UFileGenerator(tk.Tk):
-    def __init__(self):
-        super().__init__()
-
-        self.title("M3U File Generator")
-        self.geometry("400x100")
-
-        self.input_dir_var = tk.StringVar()
-        self.progress_var = tk.DoubleVar()
-
-        self.create_widgets()
-        self.configure_widgets()
-
-    def create_widgets(self):
-        self.input_dir_label = ttk.Label(self, text="Input Directory:")
-        self.input_dir_entry = ttk.Entry(self, textvariable=self.input_dir_var, state="readonly")
-        self.input_dir_button = ttk.Button(self, text="Browse", command=self.browse_input_dir)
-        self.generate_button = ttk.Button(self, text="Generate", command=self.on_generate)
-        self.progress_bar = ttk.Progressbar(self, variable=self.progress_var, mode="determinate", maximum=100)
-
-    def configure_widgets(self):
-        self.input_dir_label.grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
-        self.input_dir_entry.grid(row=0, column=1, padx=5, pady=5, sticky=tk.EW)
-        self.input_dir_button.grid(row=0, column=2, padx=5, pady=5)
-        self.generate_button.grid(row=1, column=1, padx=5, pady=5)
-        self.progress_bar.grid(row=2, column=0, columnspan=3, padx=5, pady=5, sticky=tk.EW)
-
-        self.columnconfigure(1, weight=1)
-
-    def browse_input_dir(self):
-        input_dir = filedialog.askdirectory()
-        if input_dir:
-            self.input_dir_var.set(input_dir)
-
-    def on_generate(self):
-        input_dir = self.input_dir_var.get()
-
-        if not input_dir:
-            messagebox.showerror("Error", "Please choose an input directory.")
-            return
-
-        subdirectories = [d for d in os.listdir(input_dir) if os.path.isdir(os.path.join(input_dir, d))]
-        if not subdirectories:
-            messagebox.showerror("Error", "No subdirectories found in the input directory.")
-            return
-
-        total_dirs = len(subdirectories)
-        for idx, subdir in enumerate(subdirectories, start=1):
-            m3u_path = os.path.join(input_dir, f"{subdir}.m3u")
-            sub_dir_path = os.path.join(input_dir, subdir)
-
-            with open(m3u_path, "w") as m3u_file:
-                for root, _, files in os.walk(sub_dir_path):
-                    for file in files:
-                        relative_path = os.path.relpath(os.path.join(root, file), start=input_dir)
-                        m3u_file.write(f"{relative_path}\n")
-
-            progress = (idx / total_dirs) * 100
-            self.progress_var.set(progress)
-            self.update_idletasks()
-
-        messagebox.showinfo("Success", "M3U files generated successfully.")
-        self.progress_var.set(0)
+def browse_directory():
+    folder_path = filedialog.askdirectory()
+    if folder_path:
+        path_label.config(text=folder_path)
+        organize_button.config(state=tk.NORMAL)
 
 
-if __name__ == "__main__":
-    app = M3UFileGenerator()
-    app.mainloop()
+def organize_files():
+    folder_path = path_label["text"]
+    organize_button.config(state=tk.DISABLED)
+
+    # Step 1: Select the input directory
+    if not folder_path:
+        messagebox.showerror("Error", "No directory selected.")
+        return
+
+    # Step 2: Scan directory for multidisc games
+    multi_disc_games = {}
+    total_files = 0
+    error_log = []
+
+    for _, _, files in os.walk(folder_path):
+        total_files += len(files)
+
+    progress_bar["maximum"] = total_files
+    progress_bar["value"] = 0
+
+    for root, dirs, files in os.walk(folder_path):
+        for filename in files:
+            if filename.endswith(".chd"):
+                match = re.match(r"(.+?)\s\((.+?)\)\s\((Disc\s\d+)\)", filename)
+                if match:
+                    game_title, region, disc = match.groups()
+                    if game_title not in multi_disc_games:
+                        multi_disc_games[game_title] = []
+                    multi_disc_games[game_title].append(os.path.join(root, filename))
+            progress_bar["value"] += 1
+
+    # Step 3: Create subdirectories for multi-disc games
+    # Step 4: Move games into their appropriate subdirectories
+    for game_title, disc_paths in multi_disc_games.items():
+        subdir_path = os.path.join(folder_path, game_title)
+        if not os.path.exists(subdir_path):
+            os.mkdir(subdir_path)
+
+        for disc_path in sorted(
+            disc_paths, key=lambda x: re.search(r"(Disc\s\d+)", x).group(0)
+        ):
+            if os.path.dirname(disc_path) != subdir_path:
+                old_path = disc_path
+                new_path = os.path.join(subdir_path, os.path.basename(disc_path))
+                try:
+                    os.rename(old_path, new_path)
+                except Exception as e:
+                    error_log.append(
+                        f"Error moving file '{old_path}' to '{new_path}': {str(e)}"
+                    )
+
+    # Step 5: Scan the directory for subdirectories
+    subdirectories = [
+        os.path.join(folder_path, d)
+        for d in os.listdir(folder_path)
+        if os.path.isdir(os.path.join(folder_path, d))
+    ]
+
+    # Step 6: Create the m3u for each subdirectory relative to the input directory
+    # Step 7: Save m3u files to the input directory
+    for subdir_path in subdirectories:
+        game_title = os.path.basename(subdir_path)
+        m3u_filename = f"{game_title}.m3u"
+        m3u_path = os.path.join(folder_path, m3u_filename)
+
+        chd_files = [f for f in os.listdir(subdir_path) if f.endswith(".chd")]
+
+        if chd_files:
+            try:
+                with open(m3u_path, "w") as m3u_file:
+                    for chd_file in sorted(
+                        chd_files, key=lambda x: re.search(r"(Disc\s\d+)", x).group(0)
+                    ):
+                        m3u_file.write(f"{game_title}/{chd_file}\n")
+            except Exception as e:
+                error_log.append(f"Error creating m3u file '{m3u_path}': {str(e)}")
+
+    progress_bar["value"] = 0
+
+    if error_log:
+        with open(os.path.join(folder_path, "error_log.txt"), "w") as error_file:
+            for error in error_log:
+                error_file.write(f"{error}\n")
+
+        messagebox.showerror(
+            "Error", "Errors occurred during execution. Please check error_log.txt."
+        )
+    else:
+        messagebox.showinfo("Completed", "Organization of PS1 Roms is complete.")
+    organize_button.config(state=tk.NORMAL)
+
+
+# Initialize tkinter window
+window = tk.Tk()
+window.title("PS1 Roms Organizer")
+window.geometry("500x100")
+
+# Create widgets
+frame = ttk.Frame(window, padding="10")
+frame.grid(column=0, row=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+
+browse_button = ttk.Button(frame, text="Browse", command=browse_directory)
+browse_button.grid(column=0, row=0, sticky=(tk.W, tk.E))
+
+path_label = ttk.Label(frame, text="")
+path_label.grid(column=1, row=0, sticky=(tk.W, tk.E))
+
+organize_button = ttk.Button(
+    frame, text="Organize PS1 Roms", state=tk.DISABLED, command=organize_files
+)
+organize_button.grid(column=2, row=0, sticky=(tk.W, tk.E))
+
+progress_bar = ttk.Progressbar(frame, mode="determinate")
+progress_bar.grid(column=0, row=1, columnspan=3, sticky=(tk.W, tk.E))
+
+# Configure column and row weights
+window.columnconfigure(0, weight=1)
+window.rowconfigure(0, weight=1)
+frame.columnconfigure(1, weight=1)
+frame.rowconfigure(1, weight=1)
+
+# Run the main loop
+window.mainloop()
